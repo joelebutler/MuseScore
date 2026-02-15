@@ -2626,9 +2626,59 @@ void TLayout::layoutGlissandoSegment(GlissandoSegment* item, LayoutContext&)
     if (item->staff()) {
         ldata->setMag(item->staff()->staffMag(item->tick()));
     }
-    RectF r = RectF(0.0, 0.0, item->pos2().x(), item->pos2().y()).normalized();
-    double lw = item->absoluteFromSpatium(item->lineWidth()) * .5;
-    item->setbbox(r.adjusted(-lw, -lw, lw, lw));
+
+    const Glissando* glissando = item->glissando();
+    Shape shape(Shape::Type::Composite);
+    constexpr double granularity = 4.0; // raise this value to get more steps / spatium
+    const double qlw = item->absoluteFromSpatium(item->lineWidth()) * .25;
+
+    const double _spatium = item->spatium();
+    const double w = item->pos2().x();
+    const double h = item->pos2().y();
+    const double l = sqrt(w * w + h * h);
+    const double angle = asin(-h / l);
+    const int nSteps = std::clamp(static_cast<int>(std::round(l / (_spatium / granularity))), 4, 64);
+
+    const double stepX = item->pos2().x() / nSteps;
+    const double stepY = item->pos2().y() / nSteps;
+    for (int n = 0; n < nSteps; ++n) {
+        // draws rects with step size expanded by 50% to prevent gaps near line
+        // adjusts by qlw to prevent flat lines from losing interactability
+        PointF start = PointF(stepX * n - 0.5 * stepX, stepY * n - 0.5 * stepY);
+        PointF end = PointF(start.x() + stepX * 2.0, start.y() + stepY * 2.0);
+        RectF segRect = RectF(start, end).normalized();
+        segRect.adjust(-qlw, -qlw, qlw, qlw);
+        shape.add(segRect, item);
+    }
+
+    if (glissando->showText() && !glissando->text().isEmpty()) {
+        Font f(glissando->fontFace(), Font::Type::Unknown);
+        f.setPointSizeF(glissando->fontSize() * _spatium / item->defaultSpatium());
+        f.setBold(glissando->fontStyle() & FontStyle::Bold);
+        f.setItalic(glissando->fontStyle() & FontStyle::Italic);
+        FontMetrics fm(f);
+        RectF r = fm.tightBoundingRect(glissando->text());
+
+        // if text longer than available space, skip it
+        if (r.width() < l) {
+            const double x = (l - r.width()) * 0.5;
+            double yOffset = r.height() + r.y();             // find text descender height
+            // raise text slightly above line and slightly more with WAVY than with STRAIGHT
+            yOffset += _spatium * (glissando->glissandoType() == GlissandoType::WAVY ? 0.4 : 0.1);
+
+            RectF textRect(x, -yOffset + r.y(), r.width(), r.height());
+            double innerTrim = fm.height() * 0.15;
+            RectF rotatedRect
+                =Transform()
+                  .rotateRadians(-angle)
+                  .map(textRect)
+                  .adjusted(innerTrim, innerTrim, -innerTrim, -innerTrim);
+
+            shape.add(rotatedRect, item);
+        }
+    }
+
+    ldata->setShape(shape);
 }
 
 void TLayout::layoutGraceNotesGroup(GraceNotesGroup* item, LayoutContext& ctx)
